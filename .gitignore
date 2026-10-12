@@ -1,0 +1,13 @@
+Safe101/
+CS324 A1/
+target/
+.vscode/
+.idea/
+.settings/
+.classpath
+.project
+*.iml
+*.class
+*.jar
+*.log
+.DS_Store

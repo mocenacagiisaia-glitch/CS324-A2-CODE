@@ -1,0 +1,1 @@
+PASS: bootstrap + 4 workers + 2 concurrent client JVMs; 24 checked calculations; leader rotation, agreement and JAC accounting.

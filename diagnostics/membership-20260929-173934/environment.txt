@@ -1,0 +1,20 @@
+Commit: 7b339041558adb385a57d92566a908796d701732 Working tree before diagnostic edit: ## main...origin/main
+?? demo-numbers.csv
+?? demo-range.csv
+?? diagnostics/
+?? git-log-appendix.txt
+ Tracked changes:  Staged changes:  Java: java : openjdk version "21.0.11" 2026-04-21 LTS
+At line:2 char:435
++ ... iff --cached --stat | Out-String),'Java:',(java -version 2>&1 | Out-S ...
++                                                ~~~~~~~~~~~~~~~~~~
+    + CategoryInfo          : NotSpecified: (openjdk version "21.0.11" 2026-04-21 LTS:String) [], RemoteException
+    + FullyQualifiedErrorId : NativeCommandError
+ 
+OpenJDK Runtime Environment Temurin-21.0.11+10 (build 21.0.11+10-LTS)
+OpenJDK 64-Bit Server VM Temurin-21.0.11+10 (build 21.0.11+10-LTS, mixed mode, sharing)
+ Maven: Apache Maven 3.9.12 (848fbb4bf2d427b72bdb2471c22fced7ebd9a7a1)
+Maven home: C:\Users\User\AppData\Local\Programs\Apache Maven\apache-maven-3.9.12
+Java version: 21.0.11, vendor: Eclipse Adoptium, runtime: C:\Program Files\Eclipse Adoptium\jdk-21.0.11.10-hotspot
+Default locale: en_AU, platform encoding: UTF-8
+OS name: "windows 10", version: "10.0", arch: "amd64", family: "windows"
+

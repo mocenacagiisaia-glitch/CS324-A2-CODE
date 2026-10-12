@@ -1,0 +1,16 @@
+﻿*   7b33904 2026-09-27 Krishnil Prasad <s11022399@student.usp.ac.fj>  (HEAD -> main, origin/main, origin/HEAD) Merge pull request #3: reject blank bootstrap hosts
+|\  
+| * 91f3ba0 2026-09-27 Krishnil Prasad <s11022399@student.usp.ac.fj>  (origin/feature/jobs-client) Reject missing bootstrap host before RMI lookup
+|/  
+*   4dab569 2026-09-27 Krishnil Prasad <s11022399@student.usp.ac.fj>  Merge pull request #2: job engine, CSV and concurrent clients
+|\  
+| * 4d41467 2026-09-27 Codex <codex@users.noreply.local>  Implement balanced job engine, CSV input and concurrent clients
+|/  
+*   d688f0c 2026-09-27 Maanav Kumar <166988355+maanavkumar11@users.noreply.github.com>  Merge pull request #1: Member 2 election and coordination
+|\  
+| * 7bd1621 2026-09-27 Maanav Kumar <maanavkumar61@gmail.com>  (origin/feature/election-coordination) Preserve active coordinator term when a lower-ID worker joins
+| * aeb4dd3 2026-09-27 Maanav Kumar <maanavkumar61@gmail.com>  Document specification mapping and Member 3 integration contract
+| * 01c35a5 2026-09-27 Maanav Kumar <maanavkumar61@gmail.com>  Implement worker election and five-job coordination with RMI tests
+|/  
+* 1babb41 2026-09-26 Codex <codex@users.noreply.local>  (feature/jobs-client, feature/election-coordination) Implement membership and RMI worker runtime with focused tests
+* aacf959 2026-09-26 Codex <codex@users.noreply.local>  Create Maven skeleton, shared RMI contracts and three-person task plan

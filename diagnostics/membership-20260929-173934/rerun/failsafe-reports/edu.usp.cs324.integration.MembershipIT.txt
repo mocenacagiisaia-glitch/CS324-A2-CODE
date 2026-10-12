@@ -1,0 +1,4 @@
+-------------------------------------------------------------------------------
+Test set: edu.usp.cs324.integration.MembershipIT
+-------------------------------------------------------------------------------
+Tests run: 1, Failures: 0, Errors: 0, Skipped: 0, Time elapsed: 28.01 s -- in edu.usp.cs324.integration.MembershipIT
