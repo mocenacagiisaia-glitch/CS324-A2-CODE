@@ -55,3 +55,14 @@ separate-process integration test, with no failures, errors or skips. Swing
 interaction and cross-machine networking still need a manual demo. Commits use
 Codex's agent identity; the user authorized the authenticated GitHub account for
 pushing and opening the PR. This does not attribute the work to that account owner.
+
+## A2 client gRPC migration checkpoint
+
+Implemented with Codex at Isaia's request while covering the calculations/client
+area normally assigned to Krishnil. This records the actual assistance; it does
+not claim that Krishnil authored this implementation. Based on main 50fbf4b.
+Adds a job Protobuf contract, streamed phase updates, a worker service adapter,
+gRPC discovery/submission client, Swing updates and a checked gRPC headless client.
+Retains A1 calculation/CSV code and legacy RMI clients for regression verification.
+See A2_JOBS_CLIENT.md for the remaining worker-to-worker migration, per-chunk
+progress and durable recovery integration limits.

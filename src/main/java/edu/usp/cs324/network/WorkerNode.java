@@ -278,6 +278,7 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
                 membershipServer = ServerBuilder.forPort(grpcPort)
                         .maxInboundMessageSize(RecoveryStateServiceImpl.MAX_RPC_MESSAGE_BYTES)
                         .addService(new WorkerMembershipServiceImpl(node))
+                        .addService(new edu.usp.cs324.jobs.JobServiceImpl(node::submit))
                         .addService(new RecoveryStateServiceImpl(recovery)).build().start();
                 // Listen before registration: reciprocal AddNeighbour RPCs must reach us.
                 bootstrap.register(self);

@@ -9,7 +9,7 @@ import javax.swing.table.DefaultTableModel;
 /** Each submission owns a SwingWorker; all file/network/calculation waits stay off the EDT. */
 public final class ClientGui extends JFrame {
     private final JTextField host = new JTextField("127.0.0.1", 14);
-    private final JTextField port = new JTextField("1099", 6);
+    private final JTextField port = new JTextField("5000", 6);
     private final JComboBox<Job.Type> type = new JComboBox<>(Job.Type.values());
     private final JTextArea input = new JTextArea("1,2,3,4,5", 5, 50);
     private final DefaultTableModel results = new DefaultTableModel(new String[]{"Task", "Type", "Status", "Result / error"}, 0) {
@@ -54,12 +54,15 @@ public final class ClientGui extends JFrame {
         Job.Type selected = (Job.Type) type.getSelectedItem();
         int row = results.getRowCount();
         results.addRow(new Object[]{row + 1, selected, "Running", file == null ? "Manual input" : file.toString()});
-        new SwingWorker<String, Void>() {
+        new SwingWorker<String, edu.usp.cs324.proto.jobs.JobUpdate>() {
             @Override protected String doInBackground() throws Exception {
                 int number = Integer.parseInt(portText);
                 if (number < 1 || number > 65535) throw new IllegalArgumentException("Port must be 1..65535");
                 Job job = file == null ? JobInput.parse(selected, data) : JobInput.read(selected, file);
-                return ClusterClient.connect(endpoint, number).submit(job).toString();
+                return new GrpcJobClient(endpoint, number).submit(job, this::publish).toString();
+            }
+            @Override protected void process(java.util.List<edu.usp.cs324.proto.jobs.JobUpdate> updates) {
+                for (var update : updates) results.setValueAt(update.getState().name(), row, 2);
             }
             @Override protected void done() {
                 try {
@@ -76,6 +79,6 @@ public final class ClientGui extends JFrame {
         if (args.length != 0 && args.length != 2)
             throw new IllegalArgumentException("ClientGui [bootstrapHost bootstrapPort]");
         SwingUtilities.invokeLater(() -> new ClientGui(args.length == 0 ? "127.0.0.1" : args[0],
-                args.length == 0 ? "1099" : args[1]).setVisible(true));
+                args.length == 0 ? "5000" : args[1]).setVisible(true));
     }
 }
