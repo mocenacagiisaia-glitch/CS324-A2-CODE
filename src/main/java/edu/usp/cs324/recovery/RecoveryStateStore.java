@@ -25,7 +25,7 @@ public final class RecoveryStateStore implements AutoCloseable {
     private static final int MAGIC = 0x44524350; // DRCP
     private static final int FORMAT_VERSION = 1;
     private static final int HEADER_BYTES = 4 + 4 + 4 + 32;
-    private static final int MAX_PAYLOAD_BYTES = 64 * 1024 * 1024;
+    public static final int MAX_SNAPSHOT_BYTES = 64 * 1024 * 1024;
 
     private final Path file;
     private final FileChannel lockChannel;
@@ -89,7 +89,7 @@ public final class RecoveryStateStore implements AutoCloseable {
                     || !snapshot.getCoordinatorIncarnationId().equals(latest.getCoordinatorIncarnationId())))
                 throw new IllegalArgumentException("Coordinator identity cannot change within the same term");
         }
-        if (snapshot.getSerializedSize() > MAX_PAYLOAD_BYTES)
+        if (snapshot.getSerializedSize() > MAX_SNAPSHOT_BYTES)
             throw new IllegalArgumentException("Checkpoint exceeds the 64 MiB payload limit");
         byte[] payload = snapshot.toByteArray();
         ByteBuffer contents = ByteBuffer.allocate(HEADER_BYTES + payload.length)
@@ -113,14 +113,14 @@ public final class RecoveryStateStore implements AutoCloseable {
 
     private RecoverySnapshot readCheckpoint() throws IOException {
         long size = Files.size(file);
-        if (size < HEADER_BYTES || size > (long) HEADER_BYTES + MAX_PAYLOAD_BYTES)
+        if (size < HEADER_BYTES || size > (long) HEADER_BYTES + MAX_SNAPSHOT_BYTES)
             throw new IOException("Invalid checkpoint length: " + file);
         byte[] bytes = Files.readAllBytes(file);
         ByteBuffer input = ByteBuffer.wrap(bytes);
         if (input.getInt() != MAGIC || input.getInt() != FORMAT_VERSION)
             throw new IOException("Unknown checkpoint format: " + file);
         int payloadLength = input.getInt();
-        if (payloadLength < 0 || payloadLength > MAX_PAYLOAD_BYTES || input.remaining() != 32 + payloadLength)
+        if (payloadLength < 0 || payloadLength > MAX_SNAPSHOT_BYTES || input.remaining() != 32 + payloadLength)
             throw new IOException("Checkpoint is truncated or has an invalid payload length: " + file);
         byte[] expectedDigest = new byte[32];
         input.get(expectedDigest);

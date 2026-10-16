@@ -1,9 +1,12 @@
 package edu.usp.cs324.network;
 
 import edu.usp.cs324.api.*;
+import edu.usp.cs324.recovery.RecoveryStateServiceImpl;
+import edu.usp.cs324.recovery.RecoveryStateStore;
 import io.grpc.Server;
 import io.grpc.ServerBuilder;
 import java.math.BigInteger;
+import java.nio.file.Path;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
 import java.rmi.server.UnicastRemoteObject;
@@ -235,13 +238,13 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
     }
 
     public static void main(String[] args) throws Exception {
-        if (args.length == 7) {
+        if (args.length == 7 || args.length == 8) {
             startGrpcMembership(args);
             return;
         }
         // Six arguments preserve the existing RMI integration harness during migration.
         if (args.length != 6) throw new IllegalArgumentException(
-                "WorkerNode id host registryPort exportPort grpcPort bootstrapHost bootstrapGrpcPort "
+                "WorkerNode id host registryPort exportPort grpcPort bootstrapHost bootstrapGrpcPort [checkpointFile] "
                         + "(or the legacy six-argument RMI launcher)");
         System.setProperty("java.rmi.server.hostname", args[1]);
         BootstrapRemote bootstrap = (BootstrapRemote) LocateRegistry.getRegistry(args[4],
@@ -259,7 +262,10 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
         System.setProperty("java.rmi.server.hostname", args[1]);
         Peer self = new Peer(Integer.parseInt(args[0]), args[1], Integer.parseInt(args[2]));
         int grpcPort = Integer.parseInt(args[4]);
-        try (BootstrapGrpcClient bootstrap = new BootstrapGrpcClient(args[5],
+        Path checkpoint = args.length == 8 ? Path.of(args[7])
+                : Path.of("data", "recovery", "worker-" + self.id() + ".checkpoint");
+        try (RecoveryStateStore recovery = new RecoveryStateStore(checkpoint);
+             BootstrapGrpcClient bootstrap = new BootstrapGrpcClient(args[5],
                 Integer.parseInt(args[6]), self, grpcPort);
              WorkerNode node = new WorkerNode(self, bootstrap, Integer.parseInt(args[3]),
                      ServiceLoader.load(JobEngine.class).findFirst().orElse(null))) {
@@ -270,7 +276,9 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
                 registry = LocateRegistry.createRegistry(self.registryPort());
                 registry.rebind("worker", node);
                 membershipServer = ServerBuilder.forPort(grpcPort)
-                        .addService(new WorkerMembershipServiceImpl(node)).build().start();
+                        .maxInboundMessageSize(RecoveryStateServiceImpl.MAX_RPC_MESSAGE_BYTES)
+                        .addService(new WorkerMembershipServiceImpl(node))
+                        .addService(new RecoveryStateServiceImpl(recovery)).build().start();
                 // Listen before registration: reciprocal AddNeighbour RPCs must reach us.
                 bootstrap.register(self);
                 Server runningServer = membershipServer;
@@ -281,8 +289,13 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
                     try { node.close(); } catch (java.rmi.NoSuchObjectException ignored) { }
                     try { UnicastRemoteObject.unexportObject(runningRegistry, true); }
                     catch (java.rmi.NoSuchObjectException ignored) { }
+                    try { recovery.close(); }
+                    catch (java.io.IOException e) { System.err.println("Recovery store shutdown failed: " + e.getMessage()); }
                 }, "worker-" + self.id() + "-shutdown");
                 Runtime.getRuntime().addShutdownHook(shutdownHook);
+                System.out.println("RECOVERY STORE READY revision="
+                        + recovery.latest().map(snapshot -> snapshot.getRevision()).orElse(0L)
+                        + " file=" + checkpoint.toAbsolutePath());
                 System.out.println("WORKER READY " + self.id() + " gRPC membership port=" + grpcPort);
                 membershipServer.awaitTermination();
             } finally {
@@ -290,7 +303,11 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
                     try { Runtime.getRuntime().removeShutdownHook(shutdownHook); }
                     catch (IllegalStateException ignored) { /* JVM is already shutting down. */ }
                 }
-                if (membershipServer != null) membershipServer.shutdownNow();
+                if (membershipServer != null) {
+                    membershipServer.shutdownNow();
+                    try { membershipServer.awaitTermination(5, TimeUnit.SECONDS); }
+                    catch (InterruptedException e) { Thread.currentThread().interrupt(); }
+                }
                 if (registry != null) {
                     try { UnicastRemoteObject.unexportObject(registry, true); }
                     catch (java.rmi.NoSuchObjectException ignored) { }

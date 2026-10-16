@@ -4,6 +4,31 @@ package distrilab.recovery.v1;
 option java_package = "edu.usp.cs324.proto.recovery";
 option java_multiple_files = true;
 
+// One worker's checkpoint access. A successful save acknowledges this replica only;
+// it does not certify a quorum, authorize a leader, or resume any job.
+service RecoveryStateService {
+  rpc SaveSnapshot(SaveRecoverySnapshotRequest) returns (SaveRecoverySnapshotReply);
+  rpc GetSnapshot(GetRecoverySnapshotRequest) returns (GetRecoverySnapshotReply);
+}
+
+message SaveRecoverySnapshotRequest {
+  RecoverySnapshot snapshot = 1;
+}
+
+message SaveRecoverySnapshotReply {
+  // False for an identical replay; both outcomes acknowledge a persisted snapshot.
+  bool written = 1;
+  int64 revision = 2;
+  int64 leadership_term = 3;
+}
+
+message GetRecoverySnapshotRequest {}
+
+message GetRecoverySnapshotReply {
+  // Absent when this replica has never stored a checkpoint.
+  RecoverySnapshot snapshot = 1;
+}
+
 // Full checkpoint data. Saving this locally is not a quorum or a leadership grant.
 // The coordination layer will decide which replicated checkpoint is authoritative.
 message RecoverySnapshot {
