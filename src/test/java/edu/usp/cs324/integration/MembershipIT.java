@@ -1,14 +1,30 @@
 package edu.usp.cs324.integration;
 
-import edu.usp.cs324.api.*;
+import java.net.ServerSocket;
+import java.nio.file.Files;
+import java.nio.file.Path;
+import java.rmi.registry.LocateRegistry;
+import java.util.ArrayDeque;
+import java.util.ArrayList;
+import java.util.Deque;
+import java.util.HashSet;
+import java.util.LinkedHashMap;
+import java.util.List;
+import java.util.Map;
+import java.util.Set;
+import java.util.concurrent.TimeUnit;
+
+import static org.junit.jupiter.api.Assertions.assertEquals;
+import static org.junit.jupiter.api.Assertions.assertNull;
+import static org.junit.jupiter.api.Assertions.assertTrue;
+import static org.junit.jupiter.api.Assertions.fail;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.Timeout;
-import java.net.ServerSocket;
-import java.nio.file.*;
-import java.rmi.registry.LocateRegistry;
-import java.util.*;
-import java.util.concurrent.TimeUnit;
-import static org.junit.jupiter.api.Assertions.*;
+
+import edu.usp.cs324.api.BootstrapRemote;
+import edu.usp.cs324.api.Peer;
+import edu.usp.cs324.api.Status;
+import edu.usp.cs324.api.Term;
 
 /** Real JVMs verify membership, election and concurrent checked clients with the real provider. */
 class MembershipIT {
