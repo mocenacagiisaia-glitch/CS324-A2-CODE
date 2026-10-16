@@ -1,0 +1,60 @@
+syntax = "proto3";
+
+package distrilab.v1;
+
+option java_package = "edu.usp.cs324.proto";
+option java_multiple_files = true;
+
+service BootstrapService {
+  rpc RegisterWorker(RegisterWorkerRequest) returns (RegisterWorkerReply);
+  rpc ListActiveWorkers(ListActiveWorkersRequest) returns (ListActiveWorkersReply);
+  rpc Heartbeat(HeartbeatRequest) returns (HeartbeatReply);
+}
+
+service WorkerMembershipService {
+  rpc AddNeighbour(AddNeighbourRequest) returns (MembershipReply);
+}
+
+message WorkerEndpoint {
+  uint32 worker_id = 1;
+  string host = 2;
+  uint32 grpc_port = 3;
+  string incarnation_id = 4;
+  // Temporary bridge to the existing worker job/election API during gRPC migration.
+  // Directory-only gRPC clients can omit this; the current WorkerNode adapter requires it.
+  uint32 registry_port = 5;
+}
+
+message RegisterWorkerRequest {
+  WorkerEndpoint worker = 1;
+}
+
+message RegisterWorkerReply {
+  bool accepted = 1;
+  string message = 2;
+  repeated WorkerEndpoint existing_workers = 3;
+}
+
+message ListActiveWorkersRequest {}
+
+message ListActiveWorkersReply {
+  repeated WorkerEndpoint workers = 1;
+}
+
+message HeartbeatRequest {
+  uint32 worker_id = 1;
+  string incarnation_id = 2;
+}
+
+message HeartbeatReply {
+  bool accepted = 1;
+}
+
+message AddNeighbourRequest {
+  WorkerEndpoint neighbour = 1;
+}
+
+message MembershipReply {
+  bool accepted = 1;
+  string message = 2;
+}

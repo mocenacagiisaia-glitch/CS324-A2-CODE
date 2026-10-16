@@ -30,7 +30,7 @@ class MembershipIT {
         List<String> command = new ArrayList<>(List.of(
                 Path.of(System.getProperty("java.home"), "bin", "java").toString(),
                 "-Dsun.rmi.transport.tcp.responseTimeout=10000", "-cp",
-                Path.of("target", "classes").toAbsolutePath().toString(), main));
+                System.getProperty("surefire.test.class.path", System.getProperty("java.class.path")), main));
         command.addAll(List.of(args));
         Process process = new ProcessBuilder(command).redirectErrorStream(true)
                 .redirectOutput(logs.resolve(log).toFile()).start();

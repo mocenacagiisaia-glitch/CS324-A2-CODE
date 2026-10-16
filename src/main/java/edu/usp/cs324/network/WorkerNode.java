@@ -1,6 +1,8 @@
 package edu.usp.cs324.network;
 
 import edu.usp.cs324.api.*;
+import io.grpc.Server;
+import io.grpc.ServerBuilder;
 import java.math.BigInteger;
 import java.rmi.RemoteException;
 import java.rmi.registry.LocateRegistry;
@@ -233,8 +235,14 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
     }
 
     public static void main(String[] args) throws Exception {
+        if (args.length == 7) {
+            startGrpcMembership(args);
+            return;
+        }
+        // Six arguments preserve the existing RMI integration harness during migration.
         if (args.length != 6) throw new IllegalArgumentException(
-                "WorkerNode id host registryPort exportPort bootstrapHost bootstrapPort");
+                "WorkerNode id host registryPort exportPort grpcPort bootstrapHost bootstrapGrpcPort "
+                        + "(or the legacy six-argument RMI launcher)");
         System.setProperty("java.rmi.server.hostname", args[1]);
         BootstrapRemote bootstrap = (BootstrapRemote) LocateRegistry.getRegistry(args[4],
                 Integer.parseInt(args[5])).lookup("bootstrap");
@@ -245,5 +253,49 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
         try { bootstrap.register(self); }
         catch (Exception e) { System.err.println("Startup failed: " + e); System.exit(1); }
         System.out.println("WORKER READY " + self.id() + "");
+    }
+
+    private static void startGrpcMembership(String[] args) throws Exception {
+        System.setProperty("java.rmi.server.hostname", args[1]);
+        Peer self = new Peer(Integer.parseInt(args[0]), args[1], Integer.parseInt(args[2]));
+        int grpcPort = Integer.parseInt(args[4]);
+        try (BootstrapGrpcClient bootstrap = new BootstrapGrpcClient(args[5],
+                Integer.parseInt(args[6]), self, grpcPort);
+             WorkerNode node = new WorkerNode(self, bootstrap, Integer.parseInt(args[3]),
+                     ServiceLoader.load(JobEngine.class).findFirst().orElse(null))) {
+            java.rmi.registry.Registry registry = null;
+            Server membershipServer = null;
+            Thread shutdownHook = null;
+            try {
+                registry = LocateRegistry.createRegistry(self.registryPort());
+                registry.rebind("worker", node);
+                membershipServer = ServerBuilder.forPort(grpcPort)
+                        .addService(new WorkerMembershipServiceImpl(node)).build().start();
+                // Listen before registration: reciprocal AddNeighbour RPCs must reach us.
+                bootstrap.register(self);
+                Server runningServer = membershipServer;
+                java.rmi.registry.Registry runningRegistry = registry;
+                shutdownHook = new Thread(() -> {
+                    bootstrap.close();
+                    runningServer.shutdownNow();
+                    try { node.close(); } catch (java.rmi.NoSuchObjectException ignored) { }
+                    try { UnicastRemoteObject.unexportObject(runningRegistry, true); }
+                    catch (java.rmi.NoSuchObjectException ignored) { }
+                }, "worker-" + self.id() + "-shutdown");
+                Runtime.getRuntime().addShutdownHook(shutdownHook);
+                System.out.println("WORKER READY " + self.id() + " gRPC membership port=" + grpcPort);
+                membershipServer.awaitTermination();
+            } finally {
+                if (shutdownHook != null) {
+                    try { Runtime.getRuntime().removeShutdownHook(shutdownHook); }
+                    catch (IllegalStateException ignored) { /* JVM is already shutting down. */ }
+                }
+                if (membershipServer != null) membershipServer.shutdownNow();
+                if (registry != null) {
+                    try { UnicastRemoteObject.unexportObject(registry, true); }
+                    catch (java.rmi.NoSuchObjectException ignored) { }
+                }
+            }
+        }
     }
 }
