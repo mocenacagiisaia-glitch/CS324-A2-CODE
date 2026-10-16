@@ -1,0 +1,69 @@
+syntax = "proto3";
+
+package distrilab.recovery.v1;
+option java_package = "edu.usp.cs324.proto.recovery";
+option java_multiple_files = true;
+
+// Full checkpoint data. Saving this locally is not a quorum or a leadership grant.
+// The coordination layer will decide which replicated checkpoint is authoritative.
+message RecoverySnapshot {
+  int64 revision = 1;
+  int64 leadership_term = 2;
+  string election_id = 3;
+  uint32 coordinator_id = 4;
+  string coordinator_incarnation_id = 5;
+  repeated RecoveryJob jobs = 6;
+  repeated RecoveryWorkerCounter worker_counters = 7;
+}
+
+message RecoveryJobInput {
+  enum Operation {
+    OPERATION_UNSPECIFIED = 0;
+    MAX = 1;
+    PRIMESUM = 2;
+    PRIMECOUNT = 3;
+  }
+  Operation operation = 1;
+  repeated sint32 numbers = 2;
+  sint32 range_start = 3;
+  sint32 range_end = 4;
+}
+
+message RecoveryJob {
+  enum State {
+    JOB_STATE_UNSPECIFIED = 0;
+    PENDING = 1;
+    RUNNING = 2;
+    COMPLETED = 3;
+  }
+  // Reuse this ID when reconnecting/retrying the same client request.
+  string job_id = 1;
+  RecoveryJobInput input = 2;
+  State state = 3;
+  repeated RecoveryTask tasks = 4;
+  // Decimal BigInteger; presence distinguishes an absent result from the value zero.
+  optional string result = 5;
+}
+
+message RecoveryTask {
+  enum State {
+    TASK_STATE_UNSPECIFIED = 0;
+    PENDING = 1;
+    RUNNING = 2;
+    COMPLETED = 3;
+  }
+  string task_id = 1;
+  RecoveryJobInput input = 2;
+  State state = 3;
+  uint32 assigned_worker_id = 4;
+  string assigned_worker_incarnation_id = 5;
+  // Increment on reassignment. A completed result belongs to this specific attempt.
+  uint32 attempt = 6;
+  optional string result = 7;
+}
+
+message RecoveryWorkerCounter {
+  uint32 worker_id = 1;
+  int64 jac = 2;
+  uint32 assigned_jobs = 3;
+}
