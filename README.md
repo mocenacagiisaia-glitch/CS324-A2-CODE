@@ -1,3 +1,5 @@
+> A2 client migration: see [gRPC jobs and clients](docs/A2_JOBS_CLIENT.md) for current startup commands and integration limits. The A1 instructions below describe the retained RMI regression path.
+
 # CS324 A1 — three-person development project
 
 Repository: https://github.com/mocenacagiisaia-glitch/CS324_A1

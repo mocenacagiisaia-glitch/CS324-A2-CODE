@@ -1,0 +1,28 @@
+syntax = "proto3";
+package distrilab.jobs.v1;
+option java_package = "edu.usp.cs324.proto.jobs";
+option java_multiple_files = true;
+
+// Migration boundary: this service delegates coordination to the worker runtime.
+service JobService {
+  rpc SubmitJob(SubmitJobRequest) returns (stream JobUpdate);
+}
+message JobInput {
+  enum Operation { OPERATION_UNSPECIFIED = 0; MAX = 1; PRIMESUM = 2; PRIMECOUNT = 3; }
+  Operation operation = 1;
+  repeated sint32 numbers = 2;
+  sint32 range_start = 3;
+  sint32 range_end = 4;
+}
+message SubmitJobRequest {
+  // Correlation only until durable deduplication is integrated. Never auto-replay.
+  string request_id = 1;
+  JobInput input = 2;
+}
+message JobUpdate {
+  enum State { STATE_UNSPECIFIED = 0; RECEIVED = 1; RUNNING = 2; COMPLETED = 3; }
+  string request_id = 1;
+  State state = 2;
+  // Present only on COMPLETED. Decimal BigInteger, including zero.
+  optional string result = 3;
+}
