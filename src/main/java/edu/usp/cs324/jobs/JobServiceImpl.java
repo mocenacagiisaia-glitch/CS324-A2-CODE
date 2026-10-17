@@ -14,7 +14,13 @@ import java.util.Objects;
  */
 public final class JobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
     @FunctionalInterface public interface Submitter { BigInteger submit(Job job) throws Exception; }
+    @FunctionalInterface public interface DurableSubmitter { BigInteger submit(String id, Job job) throws Exception; }
     private final Submitter submitter;
+    private DurableSubmitter durable;
+    public JobServiceImpl(DurableSubmitter durable) {
+        this.submitter = null;
+        this.durable = Objects.requireNonNull(durable);
+    }
     public JobServiceImpl(Submitter submitter) { this.submitter = Objects.requireNonNull(submitter); }
     @Override public void submitJob(SubmitJobRequest request, StreamObserver<JobUpdate> output) {
         Job job;
@@ -32,19 +38,26 @@ public final class JobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
             output.onNext(update(request, JobUpdate.State.RECEIVED).build());
             if (Context.current().isCancelled()) return;
             output.onNext(update(request, JobUpdate.State.RUNNING).build());
-            BigInteger result = Objects.requireNonNull(submitWithAdmissionRetry(job), "Missing result");
+            BigInteger result = Objects.requireNonNull(submitWithAdmissionRetry(request.getRequestId(), job), "Missing result");
             if (Context.current().isCancelled()) return;
             output.onNext(update(request, JobUpdate.State.COMPLETED).setResult(result.toString()).build());
             output.onCompleted();
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();
+            if (!Context.current().isCancelled() && (e instanceof IllegalArgumentException
+                    || (e instanceof io.grpc.StatusRuntimeException rpc
+                    && rpc.getStatus().getCode() == Status.Code.INVALID_ARGUMENT))) {
+                output.onError(Status.INVALID_ARGUMENT.withDescription(e.getMessage()).asRuntimeException());
+                return;
+            }
             if (!Context.current().isCancelled())
-                output.onError(Status.UNKNOWN.withDescription(
+                output.onError((durable == null ? Status.UNKNOWN : Status.UNAVAILABLE).withDescription(
                         "Submission failed; completion may be unknown. Do not automatically replay.")
                         .withCause(e).asRuntimeException());
         }
     }
-    private BigInteger submitWithAdmissionRetry(Job job) throws Exception {
+    private BigInteger submitWithAdmissionRetry(String id, Job job) throws Exception {
+        if (durable != null) return durable.submit(id, job);
         for (int attempt = 0; ; attempt++) {
             try { return submitter.submit(job); }
             catch (java.rmi.RemoteException error) {

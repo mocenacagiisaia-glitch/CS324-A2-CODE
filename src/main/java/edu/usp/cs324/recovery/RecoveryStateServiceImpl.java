@@ -43,6 +43,7 @@ public final class RecoveryStateServiceImpl extends RecoveryStateServiceGrpc.Rec
             observer.onError(Status.FAILED_PRECONDITION.withDescription(e.getMessage()).asRuntimeException());
             return;
         } catch (IOException e) {
+			e.printStackTrace(System.err);
             observer.onError(Status.INTERNAL.withDescription("Checkpoint could not be persisted").withCause(e).asRuntimeException());
             return;
         } catch (IllegalStateException e) {

@@ -15,7 +15,7 @@ message JobInput {
   sint32 range_end = 4;
 }
 message SubmitJobRequest {
-  // Correlation only until durable deduplication is integrated. Never auto-replay.
+  // Stable durable identity. Reconnect using the same ID and exactly the same input.
   string request_id = 1;
   JobInput input = 2;
 }

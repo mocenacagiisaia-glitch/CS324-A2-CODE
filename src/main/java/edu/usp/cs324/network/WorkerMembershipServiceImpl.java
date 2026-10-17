@@ -14,6 +14,12 @@ import java.util.function.Consumer;
 /** Receives membership links over gRPC and updates the local worker's neighbour set. */
 public final class WorkerMembershipServiceImpl extends WorkerMembershipServiceGrpc.WorkerMembershipServiceImplBase {
     private final Consumer<Peer> addNeighbour;
+    private Consumer<WorkerEndpoint> remember = endpoint -> { };
+
+    public WorkerMembershipServiceImpl(WorkerNode worker, BootstrapGrpcClient bootstrap) {
+        this(worker);
+        remember = bootstrap::remember;
+    }
 
     public WorkerMembershipServiceImpl(WorkerNode worker) {
         this(Objects.requireNonNull(worker, "worker")::addNeighbour);
@@ -41,6 +47,7 @@ public final class WorkerMembershipServiceImpl extends WorkerMembershipServiceGr
             return;
         }
         try {
+            remember.accept(endpoint);
             addNeighbour.accept(neighbour);
         } catch (RuntimeException e) {
             observer.onError(Status.INTERNAL.withDescription("Could not add neighbour").withCause(e).asRuntimeException());

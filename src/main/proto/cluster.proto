@@ -23,6 +23,8 @@ message WorkerEndpoint {
   // Temporary bridge to the existing worker job/election API during gRPC migration.
   // Directory-only gRPC clients can omit this; the current WorkerNode adapter requires it.
   uint32 registry_port = 5;
+  // Capability advertisement: stable-ID reconnect is safe only on the durable runtime.
+  bool durable_jobs = 6;
 }
 
 message RegisterWorkerRequest {

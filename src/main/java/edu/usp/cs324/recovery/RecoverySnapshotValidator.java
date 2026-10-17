@@ -21,6 +21,15 @@ final class RecoverySnapshotValidator {
         require(!snapshot.getElectionId().isBlank(), "Election ID is required");
         require(snapshot.getCoordinatorId() > 0, "Coordinator ID must be positive");
         require(!snapshot.getCoordinatorIncarnationId().isBlank(), "Coordinator incarnation ID is required");
+        if (snapshot.hasCoordinatorEndpoint()) {
+            var endpoint = snapshot.getCoordinatorEndpoint();
+            require(endpoint.getWorkerId() == snapshot.getCoordinatorId()
+                    && endpoint.getIncarnationId().equals(snapshot.getCoordinatorIncarnationId()),
+                    "Coordinator endpoint must match checkpoint identity");
+            require(!endpoint.getHost().isBlank() && endpoint.getGrpcPort() > 0 && endpoint.getGrpcPort() <= 65535
+                    && endpoint.getRegistryPort() > 0 && endpoint.getRegistryPort() <= 65535,
+                    "Coordinator endpoint must have a valid host and ports");
+        }
         Set<Integer> workers = new HashSet<>();
         snapshot.getWorkerCountersList().forEach(counter -> {
             require(counter.getWorkerId() > 0 && workers.add(counter.getWorkerId()), "Worker counters need unique positive IDs");
@@ -39,6 +48,11 @@ final class RecoverySnapshotValidator {
                     && job.getState() != RecoveryJob.State.UNRECOGNIZED, "Job state is required");
             for (RecoveryTask task : job.getTasksList()) {
                 require(!task.getTaskId().isBlank() && taskIds.add(task.getTaskId()), "Task IDs must be globally unique and nonblank");
+                require(task.getLeadershipTerm() >= 0 && task.getLeadershipTerm() <= snapshot.getLeadershipTerm(),
+                        "Task leadership term must not exceed checkpoint term");
+                if (task.getLeadershipTerm() > 0)
+                    require(task.getCoordinatorId() > 0 && !task.getCoordinatorIncarnationId().isBlank(),
+                            "A term-fenced task requires its coordinator identity");
                 require(task.hasInput(), "Task input is required");
                 validateInput(task.getInput());
                 require(task.getInput().getOperation() == job.getInput().getOperation(), "Task and job operations must match");

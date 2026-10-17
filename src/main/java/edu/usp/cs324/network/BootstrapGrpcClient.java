@@ -35,13 +35,49 @@ public final class BootstrapGrpcClient implements BootstrapRemote, AutoCloseable
     private boolean heartbeatStarted;
     private boolean closed;
     private WorkerEndpoint pendingNeighbour;
+    private final java.util.Map<Peer, WorkerEndpoint> endpoints = new java.util.concurrent.ConcurrentHashMap<>();
+
+    public WorkerEndpoint selfEndpoint() { return self; }
+
+    void remember(WorkerEndpoint endpoint) { endpoints.put(toPeer(endpoint), endpoint); }
+
+    public WorkerEndpoint endpoint(Peer target) {
+    if (target.equals(peer)) return self;
+
+    WorkerEndpoint endpoint = endpoints.get(target);
+
+    if (endpoint == null) {
+        try {
+            active(); // Refresh addresses from the bootstrap.
+        } catch (RemoteException e) {
+            throw new IllegalStateException(
+                    "Could not refresh worker endpoints", e);
+        }
+        endpoint = endpoints.get(target);
+    }
+
+    if (endpoint == null) {
+        throw new IllegalStateException(
+                "No active gRPC endpoint for worker " + target.id());
+    }
+
+    return endpoint;
+}
 
     public BootstrapGrpcClient(String host, int bootstrapPort, Peer peer, int grpcPort) {
-        this(host, bootstrapPort, peer, grpcPort, Duration.ofSeconds(5));
+        this(host, bootstrapPort, peer, grpcPort, Duration.ofSeconds(5), false);
+    }
+
+    public BootstrapGrpcClient(String host, int bootstrapPort, Peer peer, int grpcPort, boolean durableJobs) {
+        this(host, bootstrapPort, peer, grpcPort, Duration.ofSeconds(5), durableJobs);
     }
 
     /** Short heartbeat interval is useful in tests without waiting for a real lease to expire. */
     BootstrapGrpcClient(String host, int bootstrapPort, Peer peer, int grpcPort, Duration interval) {
+        this(host, bootstrapPort, peer, grpcPort, interval, false);
+    }
+
+    private BootstrapGrpcClient(String host, int bootstrapPort, Peer peer, int grpcPort, Duration interval, boolean durableJobs) {
         if (host == null || host.isBlank()) throw new IllegalArgumentException("Bootstrap host is required");
         checkPort(bootstrapPort);
         checkPort(grpcPort);
@@ -53,7 +89,7 @@ public final class BootstrapGrpcClient implements BootstrapRemote, AutoCloseable
         if (heartbeatMillis <= 0 || heartbeatMillis > 5_000)
             throw new IllegalArgumentException("Heartbeat interval must be between 1 and 5000 milliseconds");
         self = WorkerEndpoint.newBuilder().setWorkerId(peer.id()).setHost(peer.host())
-                .setGrpcPort(grpcPort).setRegistryPort(peer.registryPort())
+                .setGrpcPort(grpcPort).setRegistryPort(peer.registryPort()).setDurableJobs(durableJobs)
                 .setIncarnationId(UUID.randomUUID().toString()).build();
         channel = ManagedChannelBuilder.forAddress(host, bootstrapPort).usePlaintext().build();
         stub = BootstrapServiceGrpc.newBlockingStub(channel);
@@ -81,6 +117,7 @@ public final class BootstrapGrpcClient implements BootstrapRemote, AutoCloseable
             var reply = stub.withDeadlineAfter(RPC_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                     .registerWorker(RegisterWorkerRequest.newBuilder().setWorker(self).build());
             if (!reply.getAccepted()) throw new RemoteException("Registration rejected: " + reply.getMessage());
+            reply.getExistingWorkersList().forEach(w -> endpoints.put(toPeer(w), w));
             if (!reply.getExistingWorkersList().isEmpty()) {
                 pendingNeighbour = reply.getExistingWorkers(ThreadLocalRandom.current()
                         .nextInt(reply.getExistingWorkersCount()));
@@ -99,6 +136,7 @@ public final class BootstrapGrpcClient implements BootstrapRemote, AutoCloseable
         try {
             List<WorkerEndpoint> workers = stub.withDeadlineAfter(RPC_TIMEOUT_SECONDS, TimeUnit.SECONDS)
                     .listActiveWorkers(ListActiveWorkersRequest.getDefaultInstance()).getWorkersList();
+            workers.forEach(w -> endpoints.put(toPeer(w), w));
             return workers.stream().map(BootstrapGrpcClient::toPeer).toList();
         } catch (StatusRuntimeException | IllegalArgumentException e) {
             throw new RemoteException("Bootstrap discovery failed: " + e.getMessage(), e);

@@ -1,3 +1,5 @@
+> This file records an earlier checkpoint. See [live recovery runtime](A2_RECOVERY_RUNTIME.md) for the integrated durable behavior and current limits.
+
 # A2 job/client migration checkpoint
 
 Based on main 50fbf4b. This is AI-assisted implementation requested by Isaia

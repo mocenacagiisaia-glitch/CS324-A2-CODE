@@ -14,8 +14,9 @@ import java.util.*;
 import java.util.concurrent.*;
 
 /** Membership, election and coordinator runtime; calculations are supplied by JobEngine. */
-public final class WorkerNode extends UnicastRemoteObject implements WorkerRemote, AutoCloseable {
+public final class WorkerNode implements WorkerRemote, AutoCloseable {
     private final Peer self;
+    private final boolean rmiExported;
     private final BootstrapRemote bootstrap;
     private final Map<Integer, Peer> neighbours = new ConcurrentSkipListMap<>();
     private final ExecutorService execution = Executors.newVirtualThreadPerTaskExecutor();
@@ -26,14 +27,46 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
     private Term term;
     private long jac;
     private int assignedJobs;
+    private java.util.function.Function<Peer, WorkerRemote> transport;
+    private edu.usp.cs324.recovery.RecoveryRuntime durable;
+    private long installedRecoveryRevision;
+
+    void enableRecovery(edu.usp.cs324.recovery.RecoveryRuntime runtime) { durable = runtime; }
+
+    public synchronized void installRecovery(edu.usp.cs324.proto.recovery.RecoverySnapshot snapshot) {
+        if (snapshot.getRevision() < installedRecoveryRevision) return;
+        var counter = snapshot.getWorkerCountersList().stream()
+                .filter(c -> c.getWorkerId() == self.id()).findFirst();
+        counter.ifPresent(c -> { jac = c.getJac(); assignedJobs = c.getAssignedJobs(); });
+        var endpoint = snapshot.getCoordinatorEndpoint();
+        Term recovered = new Term(snapshot.getLeadershipTerm(), UUID.fromString(snapshot.getElectionId()),
+                new Peer(endpoint.getWorkerId(), endpoint.getHost(), endpoint.getRegistryPort()));
+        if (term == null || compare(recovered, term) >= 0) term = recovered;
+        installedRecoveryRevision = snapshot.getRevision();
+    }
+
+    void useTransport(java.util.function.Function<Peer, WorkerRemote> transport) {
+        this.transport = Objects.requireNonNull(transport);
+    }
+
+    private WorkerRemote connect(Peer peer) throws RemoteException {
+        try { return transport == null ? peer.connect() : transport.apply(peer); }
+        catch (RuntimeException e) { throw new RemoteException("Worker endpoint unavailable: " + peer.id(), e); }
+    }
 
 
     public WorkerNode(Peer self, BootstrapRemote bootstrap, int exportPort, JobEngine engine)
             throws RemoteException {
-        super(exportPort);
+        this(self, bootstrap, exportPort, engine, true);
+    }
+
+    WorkerNode(Peer self, BootstrapRemote bootstrap, int exportPort, JobEngine engine, boolean exportRmi)
+            throws RemoteException {
         this.self = self;
         this.bootstrap = bootstrap;
         this.engine = engine;
+        this.rmiExported = exportRmi;
+        if (exportRmi) UnicastRemoteObject.exportObject(this, exportPort);
     }
 
     @Override public synchronized Status status() {
@@ -55,7 +88,7 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
             candidates.add(new Candidate(self, jac));
         }
         for (Peer peer : neighbours.values()) {
-            try { candidates.addAll(peer.connect().election(id)); }
+            try { candidates.addAll(connect(peer).election(id)); }
             catch (RemoteException e) { System.err.println("Election link unavailable: " + peer.id()); }
         }
         return List.copyOf(candidates);
@@ -77,31 +110,33 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
             assignedJobs = 0;
         }
         for (Peer peer : neighbours.values()) {
-            try { peer.connect().coordinator(incoming); }
+            try { connect(peer).coordinator(incoming); }
             catch (RemoteException e) { System.err.println("Coordinator link unavailable: " + peer.id()); }
         }
     }
 
-    @Override public Term elect() throws RemoteException {
+    @Override public Term elect() throws RemoteException { return electForRecovery(false); }
+
+    public Term electForRecovery(boolean force) throws RemoteException {
         List<Peer> members = bootstrap.active();
         Peer initiator = members.stream().min(Comparator.comparingInt(Peer::id))
                 .orElseThrow(() -> new RemoteException("No active workers"));
         // One worker serializes election attempts, not the bootstrap. This prevents
         // overlapping candidate snapshots from installing successive empty terms.
-        if (!self.equals(initiator)) return initiator.connect().elect();
+        if (!self.equals(initiator)) return connect(initiator).elect();
         synchronized (electionGate) {
             // A newly joined gate may have no local term. Discover the newest
             // cluster term before deciding whether another election is necessary.
             Term current = status().term();
             for (Peer peer : members) {
-                Term observed = peer.connect().status().term();
+                Term observed = connect(peer).status().term();
                 if (observed != null && (current == null || compare(observed, current) > 0))
                     current = observed;
             }
-            if (current != null && members.contains(current.leader())) {
-                Status leader = current.leader().connect().status();
+            if (!force && current != null && members.contains(current.leader())) {
+                Status leader = connect(current.leader()).status();
                 if (current.equals(leader.term()) && leader.assignedJobs() < 5) {
-                    for (Peer peer : members) peer.connect().coordinator(current);
+                    for (Peer peer : members) connect(peer).coordinator(current);
                     return current;
                 }
             }
@@ -110,7 +145,7 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
             Map<Integer, Candidate> candidates = new HashMap<>();
             // Flood neighbours first; membership also covers disconnected live components.
             for (Peer peer : members) {
-                for (Candidate candidate : peer.connect().election(id)) {
+                for (Candidate candidate : connect(peer).election(id)) {
                     if (members.contains(candidate.peer())) candidates.put(candidate.peer().id(), candidate);
                 }
             }
@@ -121,19 +156,24 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
                             .thenComparing(Comparator.comparingInt((Candidate c) -> c.peer().id()).reversed()))
                     .orElseThrow(() -> new RemoteException("No election candidates"));
             Term elected = new Term(Math.incrementExact(number), id, winner.peer());
-            for (Peer peer : members) peer.connect().coordinator(elected);
+            for (Peer peer : members) connect(peer).coordinator(elected);
             return elected;
         }
     }
 
     @Override public BigInteger submit(Job job) throws RemoteException {
         Objects.requireNonNull(job, "Job");
+        if (durable != null) {
+            try { return durable.submit(UUID.randomUUID().toString(), job); }
+            catch (Exception e) { throw new RemoteException("Durable submission interrupted; use the stable-ID JobService to resume", e); }
+        }
         Term elected = elect();
         // Do not retry an RMI failure: the leader may already have admitted this job.
-        return elected.leader().connect().assign(job, elected, bootstrap.active());
+        return connect(elected.leader()).assign(job, elected, bootstrap.active());
     }
 
     @Override public BigInteger assign(Job job, Term expected, List<Peer> workers) throws RemoteException {
+        if (durable != null) throw new RetryException("Use stable-ID JobService for durable admission");
         Objects.requireNonNull(job, "Job");
         List<Peer> targets = List.copyOf(workers);
         if (targets.isEmpty() || new HashSet<>(targets).size() != targets.size())
@@ -168,7 +208,7 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
                 for (int i = 0; i < parts.size(); i++) {
                     Peer peer = targets.get(i);
                     Job part = parts.get(i);
-                    try { tasks.add(execution.submit(() -> peer.connect().compute(part))); }
+                    try { tasks.add(execution.submit(() -> connect(peer).compute(part))); }
                     catch (RuntimeException e) { failure = e; break; }
                 }
                 // The term ends on allocation, not on completion of a slow fifth job.
@@ -234,7 +274,7 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
 
     @Override public void close() throws java.rmi.NoSuchObjectException {
         execution.shutdown();
-        UnicastRemoteObject.unexportObject(this, true);
+        if (rmiExported) UnicastRemoteObject.unexportObject(this, true);
     }
 
     public static void main(String[] args) throws Exception {
@@ -266,29 +306,43 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
                 : Path.of("data", "recovery", "worker-" + self.id() + ".checkpoint");
         try (RecoveryStateStore recovery = new RecoveryStateStore(checkpoint);
              BootstrapGrpcClient bootstrap = new BootstrapGrpcClient(args[5],
-                Integer.parseInt(args[6]), self, grpcPort);
+                Integer.parseInt(args[6]), self, grpcPort, true);
              WorkerNode node = new WorkerNode(self, bootstrap, Integer.parseInt(args[3]),
-                     ServiceLoader.load(JobEngine.class).findFirst().orElse(null))) {
+                     ServiceLoader.load(JobEngine.class).findFirst().orElse(null), false);
+             edu.usp.cs324.recovery.RecoveryRuntime durable = new edu.usp.cs324.recovery.RecoveryRuntime(
+                     node, bootstrap, recovery, ServiceLoader.load(JobEngine.class).findFirst().orElseThrow())) {
+            node.durable = durable;
+            java.util.Map<edu.usp.cs324.proto.WorkerEndpoint, CoordinationGrpcClient> connections = new ConcurrentHashMap<>();
+            node.transport = target -> {
+                if (target.equals(self)) return node;
+                var endpoint = bootstrap.endpoint(target);
+                return connections.computeIfAbsent(endpoint, e -> new CoordinationGrpcClient(e, bootstrap::endpoint));
+            };
             java.rmi.registry.Registry registry = null;
             Server membershipServer = null;
             Thread shutdownHook = null;
             try {
-                registry = LocateRegistry.createRegistry(self.registryPort());
-                registry.rebind("worker", node);
+                // gRPC mode does not bind a worker RMI registry. Legacy mode above
+                // remains solely for the existing A1 regression harness.
                 membershipServer = ServerBuilder.forPort(grpcPort)
                         .maxInboundMessageSize(RecoveryStateServiceImpl.MAX_RPC_MESSAGE_BYTES)
-                        .addService(new WorkerMembershipServiceImpl(node))
-                        .addService(new edu.usp.cs324.jobs.JobServiceImpl(node::submit))
-                        .addService(new RecoveryStateServiceImpl(recovery)).build().start();
+                        .addService(new WorkerMembershipServiceImpl(node, bootstrap))
+                        .addService(new RecoveryStateServiceImpl(recovery))
+						.addService(new edu.usp.cs324.jobs.JobServiceImpl(durable::submit))
+                        .addService(durable.service())
+                        .addService(new CoordinationServiceImpl(node, bootstrap::endpoint)).build().start();
                 // Listen before registration: reciprocal AddNeighbour RPCs must reach us.
                 bootstrap.register(self);
+                durable.start();
                 Server runningServer = membershipServer;
                 java.rmi.registry.Registry runningRegistry = registry;
                 shutdownHook = new Thread(() -> {
+                    durable.close();
                     bootstrap.close();
                     runningServer.shutdownNow();
                     try { node.close(); } catch (java.rmi.NoSuchObjectException ignored) { }
-                    try { UnicastRemoteObject.unexportObject(runningRegistry, true); }
+                    connections.values().forEach(CoordinationGrpcClient::close);
+                    try { if (runningRegistry != null) UnicastRemoteObject.unexportObject(runningRegistry, true); }
                     catch (java.rmi.NoSuchObjectException ignored) { }
                     try { recovery.close(); }
                     catch (java.io.IOException e) { System.err.println("Recovery store shutdown failed: " + e.getMessage()); }
@@ -304,6 +358,7 @@ public final class WorkerNode extends UnicastRemoteObject implements WorkerRemot
                     try { Runtime.getRuntime().removeShutdownHook(shutdownHook); }
                     catch (IllegalStateException ignored) { /* JVM is already shutting down. */ }
                 }
+                connections.values().forEach(CoordinationGrpcClient::close);
                 if (membershipServer != null) {
                     membershipServer.shutdownNow();
                     try { membershipServer.awaitTermination(5, TimeUnit.SECONDS); }

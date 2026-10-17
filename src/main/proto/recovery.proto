@@ -3,6 +3,7 @@ syntax = "proto3";
 package distrilab.recovery.v1;
 option java_package = "edu.usp.cs324.proto.recovery";
 option java_multiple_files = true;
+import "cluster.proto";
 
 // One worker's checkpoint access. A successful save acknowledges this replica only;
 // it does not certify a quorum, authorize a leader, or resume any job.
@@ -39,6 +40,7 @@ message RecoverySnapshot {
   string coordinator_incarnation_id = 5;
   repeated RecoveryJob jobs = 6;
   repeated RecoveryWorkerCounter worker_counters = 7;
+  distrilab.v1.WorkerEndpoint coordinator_endpoint = 8;
 }
 
 message RecoveryJobInput {
@@ -85,10 +87,33 @@ message RecoveryTask {
   // Increment on reassignment. A completed result belongs to this specific attempt.
   uint32 attempt = 6;
   optional string result = 7;
+  int64 leadership_term = 8;
+  string coordinator_incarnation_id = 9;
+  uint32 coordinator_id = 10;
 }
 
 message RecoveryWorkerCounter {
   uint32 worker_id = 1;
   int64 jac = 2;
   uint32 assigned_jobs = 3;
+}
+
+// All mutations are routed to the lowest live directory member. This serializes
+// full snapshots; it is a fail-stop lab protocol, not network-partition consensus.
+service RecoveryControlService {
+  rpc Mutate(RecoveryMutation) returns (RecoverySnapshot);
+  rpc InstallCounters(RecoverySnapshot) returns (RecoveryControlAck);
+}
+message RecoveryControlAck {}
+message RecoveryMutation {
+  enum Action { ACTION_UNSPECIFIED = 0; REGISTER = 1; READ = 2; CLAIM = 3; COMPLETE = 4; RELEASE = 5; }
+  Action action = 1;
+  string job_id = 2;
+  RecoveryJobInput input = 3;
+  string task_id = 4;
+  uint32 expected_attempt = 5;
+  distrilab.v1.WorkerEndpoint worker = 6;
+  string result = 7;
+  int64 leadership_term = 8;
+  string coordinator_incarnation_id = 9;
 }
