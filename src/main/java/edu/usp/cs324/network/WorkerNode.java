@@ -28,6 +28,22 @@ public final class WorkerNode implements WorkerRemote, AutoCloseable {
     private long jac;
     private int assignedJobs;
     private java.util.function.Function<Peer, WorkerRemote> transport;
+    private edu.usp.cs324.recovery.RecoveryRuntime durable;
+    private long installedRecoveryRevision;
+
+    void enableRecovery(edu.usp.cs324.recovery.RecoveryRuntime runtime) { durable = runtime; }
+
+    public synchronized void installRecovery(edu.usp.cs324.proto.recovery.RecoverySnapshot snapshot) {
+        if (snapshot.getRevision() < installedRecoveryRevision) return;
+        var counter = snapshot.getWorkerCountersList().stream()
+                .filter(c -> c.getWorkerId() == self.id()).findFirst();
+        counter.ifPresent(c -> { jac = c.getJac(); assignedJobs = c.getAssignedJobs(); });
+        var endpoint = snapshot.getCoordinatorEndpoint();
+        Term recovered = new Term(snapshot.getLeadershipTerm(), UUID.fromString(snapshot.getElectionId()),
+                new Peer(endpoint.getWorkerId(), endpoint.getHost(), endpoint.getRegistryPort()));
+        if (term == null || compare(recovered, term) >= 0) term = recovered;
+        installedRecoveryRevision = snapshot.getRevision();
+    }
 
     void useTransport(java.util.function.Function<Peer, WorkerRemote> transport) {
         this.transport = Objects.requireNonNull(transport);
@@ -99,7 +115,9 @@ public final class WorkerNode implements WorkerRemote, AutoCloseable {
         }
     }
 
-    @Override public Term elect() throws RemoteException {
+    @Override public Term elect() throws RemoteException { return electForRecovery(false); }
+
+    public Term electForRecovery(boolean force) throws RemoteException {
         List<Peer> members = bootstrap.active();
         Peer initiator = members.stream().min(Comparator.comparingInt(Peer::id))
                 .orElseThrow(() -> new RemoteException("No active workers"));
@@ -115,7 +133,7 @@ public final class WorkerNode implements WorkerRemote, AutoCloseable {
                 if (observed != null && (current == null || compare(observed, current) > 0))
                     current = observed;
             }
-            if (current != null && members.contains(current.leader())) {
+            if (!force && current != null && members.contains(current.leader())) {
                 Status leader = connect(current.leader()).status();
                 if (current.equals(leader.term()) && leader.assignedJobs() < 5) {
                     for (Peer peer : members) connect(peer).coordinator(current);
@@ -145,12 +163,17 @@ public final class WorkerNode implements WorkerRemote, AutoCloseable {
 
     @Override public BigInteger submit(Job job) throws RemoteException {
         Objects.requireNonNull(job, "Job");
+        if (durable != null) {
+            try { return durable.submit(UUID.randomUUID().toString(), job); }
+            catch (Exception e) { throw new RemoteException("Durable submission interrupted; use the stable-ID JobService to resume", e); }
+        }
         Term elected = elect();
         // Do not retry an RMI failure: the leader may already have admitted this job.
         return connect(elected.leader()).assign(job, elected, bootstrap.active());
     }
 
     @Override public BigInteger assign(Job job, Term expected, List<Peer> workers) throws RemoteException {
+        if (durable != null) throw new RetryException("Use stable-ID JobService for durable admission");
         Objects.requireNonNull(job, "Job");
         List<Peer> targets = List.copyOf(workers);
         if (targets.isEmpty() || new HashSet<>(targets).size() != targets.size())
@@ -283,9 +306,12 @@ public final class WorkerNode implements WorkerRemote, AutoCloseable {
                 : Path.of("data", "recovery", "worker-" + self.id() + ".checkpoint");
         try (RecoveryStateStore recovery = new RecoveryStateStore(checkpoint);
              BootstrapGrpcClient bootstrap = new BootstrapGrpcClient(args[5],
-                Integer.parseInt(args[6]), self, grpcPort);
+                Integer.parseInt(args[6]), self, grpcPort, true);
              WorkerNode node = new WorkerNode(self, bootstrap, Integer.parseInt(args[3]),
-                     ServiceLoader.load(JobEngine.class).findFirst().orElse(null), false)) {
+                     ServiceLoader.load(JobEngine.class).findFirst().orElse(null), false);
+             edu.usp.cs324.recovery.RecoveryRuntime durable = new edu.usp.cs324.recovery.RecoveryRuntime(
+                     node, bootstrap, recovery, ServiceLoader.load(JobEngine.class).findFirst().orElseThrow())) {
+            node.durable = durable;
             java.util.Map<edu.usp.cs324.proto.WorkerEndpoint, CoordinationGrpcClient> connections = new ConcurrentHashMap<>();
             node.transport = target -> {
                 if (target.equals(self)) return node;
@@ -302,13 +328,16 @@ public final class WorkerNode implements WorkerRemote, AutoCloseable {
                         .maxInboundMessageSize(RecoveryStateServiceImpl.MAX_RPC_MESSAGE_BYTES)
                         .addService(new WorkerMembershipServiceImpl(node, bootstrap))
                         .addService(new RecoveryStateServiceImpl(recovery))
-						.addService(new edu.usp.cs324.jobs.JobServiceImpl(node::submit))
+						.addService(new edu.usp.cs324.jobs.JobServiceImpl(durable::submit))
+                        .addService(durable.service())
                         .addService(new CoordinationServiceImpl(node, bootstrap::endpoint)).build().start();
                 // Listen before registration: reciprocal AddNeighbour RPCs must reach us.
                 bootstrap.register(self);
+                durable.start();
                 Server runningServer = membershipServer;
                 java.rmi.registry.Registry runningRegistry = registry;
                 shutdownHook = new Thread(() -> {
+                    durable.close();
                     bootstrap.close();
                     runningServer.shutdownNow();
                     try { node.close(); } catch (java.rmi.NoSuchObjectException ignored) { }

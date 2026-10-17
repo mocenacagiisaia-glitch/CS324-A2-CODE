@@ -100,17 +100,49 @@ class GrpcJobsTest {
             assertEquals(BigInteger.valueOf(42), second.get(10, TimeUnit.SECONDS));
         }
     }
+    @Test void unavailableLegacyServiceIsNeverReplayed() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        try (Fixture f = new Fixture(new JobServiceGrpc.JobServiceImplBase() {
+            @Override public void submitJob(SubmitJobRequest request, StreamObserver<JobUpdate> output) {
+                calls.incrementAndGet(); output.onError(Status.UNAVAILABLE.asRuntimeException());
+            }
+        })) {
+            assertThrows(StatusRuntimeException.class, () -> f.client.submit(max));
+            assertEquals(1, calls.get());
+        }
+    }
+    @Test void durableReconnectKeepsRequestIdAndSuppressesRepeatedProgress() throws Exception {
+        AtomicInteger calls = new AtomicInteger();
+        var id = new java.util.concurrent.atomic.AtomicReference<String>();
+        try (Fixture f = new Fixture(new JobServiceGrpc.JobServiceImplBase() {
+            @Override public void submitJob(SubmitJobRequest request, StreamObserver<JobUpdate> output) {
+                if (calls.incrementAndGet() == 1) id.set(request.getRequestId());
+                assertEquals(id.get(), request.getRequestId());
+                output.onNext(JobUpdate.newBuilder().setRequestId(id.get()).setState(JobUpdate.State.RECEIVED).build());
+                output.onNext(JobUpdate.newBuilder().setRequestId(id.get()).setState(JobUpdate.State.RUNNING).build());
+                if (calls.get() == 1) { output.onError(Status.UNAVAILABLE.asRuntimeException()); return; }
+                output.onNext(JobUpdate.newBuilder().setRequestId(id.get()).setState(JobUpdate.State.COMPLETED).setResult("42").build());
+                output.onCompleted();
+            }
+        }, true)) {
+            var states = new ArrayList<JobUpdate.State>();
+            assertEquals(BigInteger.valueOf(42), f.client.submit(max, u -> states.add(u.getState())));
+            assertEquals(2, calls.get());
+            assertEquals(List.of(JobUpdate.State.RECEIVED, JobUpdate.State.RUNNING, JobUpdate.State.COMPLETED), states);
+        }
+    }
     private static final class Fixture implements AutoCloseable {
         final Server jobs;
         final Server bootstrap;
         final GrpcJobClient client;
-        Fixture(BindableService service) throws Exception {
+        Fixture(BindableService service) throws Exception { this(service, false); }
+        Fixture(BindableService service, boolean durable) throws Exception {
             jobs = ServerBuilder.forPort(0).addService(service).build().start();
             bootstrap = ServerBuilder.forPort(0).addService(new BootstrapServiceGrpc.BootstrapServiceImplBase() {
                 @Override public void listActiveWorkers(ListActiveWorkersRequest request,
                         StreamObserver<ListActiveWorkersReply> output) {
                     output.onNext(ListActiveWorkersReply.newBuilder().addWorkers(WorkerEndpoint.newBuilder()
-                            .setWorkerId(1).setHost("127.0.0.1").setGrpcPort(jobs.getPort())).build());
+                            .setWorkerId(1).setHost("127.0.0.1").setGrpcPort(jobs.getPort()).setDurableJobs(durable)).build());
                     output.onCompleted();
                 }
             }).build().start();

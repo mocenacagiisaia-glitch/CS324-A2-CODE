@@ -1,3 +1,5 @@
+> This file records an earlier checkpoint. See [live recovery runtime](A2_RECOVERY_RUNTIME.md) for the integrated durable behavior and current limits.
+
 # A2 coordination transport update
 
 Base: merged main `50fbf4b`. This update implements the first coding checkpoint

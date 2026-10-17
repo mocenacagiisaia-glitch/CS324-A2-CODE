@@ -65,11 +65,19 @@ public final class BootstrapGrpcClient implements BootstrapRemote, AutoCloseable
 }
 
     public BootstrapGrpcClient(String host, int bootstrapPort, Peer peer, int grpcPort) {
-        this(host, bootstrapPort, peer, grpcPort, Duration.ofSeconds(5));
+        this(host, bootstrapPort, peer, grpcPort, Duration.ofSeconds(5), false);
+    }
+
+    public BootstrapGrpcClient(String host, int bootstrapPort, Peer peer, int grpcPort, boolean durableJobs) {
+        this(host, bootstrapPort, peer, grpcPort, Duration.ofSeconds(5), durableJobs);
     }
 
     /** Short heartbeat interval is useful in tests without waiting for a real lease to expire. */
     BootstrapGrpcClient(String host, int bootstrapPort, Peer peer, int grpcPort, Duration interval) {
+        this(host, bootstrapPort, peer, grpcPort, interval, false);
+    }
+
+    private BootstrapGrpcClient(String host, int bootstrapPort, Peer peer, int grpcPort, Duration interval, boolean durableJobs) {
         if (host == null || host.isBlank()) throw new IllegalArgumentException("Bootstrap host is required");
         checkPort(bootstrapPort);
         checkPort(grpcPort);
@@ -81,7 +89,7 @@ public final class BootstrapGrpcClient implements BootstrapRemote, AutoCloseable
         if (heartbeatMillis <= 0 || heartbeatMillis > 5_000)
             throw new IllegalArgumentException("Heartbeat interval must be between 1 and 5000 milliseconds");
         self = WorkerEndpoint.newBuilder().setWorkerId(peer.id()).setHost(peer.host())
-                .setGrpcPort(grpcPort).setRegistryPort(peer.registryPort())
+                .setGrpcPort(grpcPort).setRegistryPort(peer.registryPort()).setDurableJobs(durableJobs)
                 .setIncarnationId(UUID.randomUUID().toString()).build();
         channel = ManagedChannelBuilder.forAddress(host, bootstrapPort).usePlaintext().build();
         stub = BootstrapServiceGrpc.newBlockingStub(channel);
