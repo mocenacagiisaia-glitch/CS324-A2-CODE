@@ -25,4 +25,16 @@ message JobUpdate {
   State state = 2;
   // Present only on COMPLETED. Decimal BigInteger, including zero.
   optional string result = 3;
+  // Input elements (or inclusive range integers) in durably completed tasks.
+  uint64 completed_units = 4;
+  uint64 total_units = 5;
+  repeated TaskProgress tasks = 6;
+}
+message TaskProgress {
+  string task_id = 1;
+  uint32 worker_id = 2;
+  string worker_incarnation_id = 3;
+  string state = 4;
+  uint32 attempt = 5;
+  uint64 units = 6;
 }

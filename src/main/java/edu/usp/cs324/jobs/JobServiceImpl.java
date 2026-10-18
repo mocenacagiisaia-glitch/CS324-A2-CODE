@@ -8,13 +8,20 @@ import io.grpc.stub.StreamObserver;
 import java.math.BigInteger;
 import java.util.Objects;
 
-/** Transitional adapter; the injected coordinator owns admission, splitting and recovery.
+/** Streaming adapter; the injected coordinator owns admission, splitting and recovery.
  * RUNNING means the submission is being processed, not that admission is durable.
  * Disconnecting the stream does not cancel already submitted distributed work.
  */
 public final class JobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
     @FunctionalInterface public interface Submitter { BigInteger submit(Job job) throws Exception; }
     @FunctionalInterface public interface DurableSubmitter { BigInteger submit(String id, Job job) throws Exception; }
+    @FunctionalInterface public interface ProgressSubmitter {
+        BigInteger submit(String id, Job job, java.util.function.Consumer<JobUpdate> progress) throws Exception;
+    }
+    private ProgressSubmitter streaming;
+    public JobServiceImpl(DurableSubmitter durable, ProgressSubmitter streaming) {
+        this(durable); this.streaming = Objects.requireNonNull(streaming);
+    }
     private final Submitter submitter;
     private DurableSubmitter durable;
     public JobServiceImpl(DurableSubmitter durable) {
@@ -38,9 +45,17 @@ public final class JobServiceImpl extends JobServiceGrpc.JobServiceImplBase {
             output.onNext(update(request, JobUpdate.State.RECEIVED).build());
             if (Context.current().isCancelled()) return;
             output.onNext(update(request, JobUpdate.State.RUNNING).build());
-            BigInteger result = Objects.requireNonNull(submitWithAdmissionRetry(request.getRequestId(), job), "Missing result");
+            JobUpdate[] latest = {null};
+            BigInteger result = Objects.requireNonNull(streaming == null
+                    ? submitWithAdmissionRetry(request.getRequestId(), job)
+                    : streaming.submit(request.getRequestId(), job, progress -> {
+                        latest[0] = progress;
+                        if (!Context.current().isCancelled()) output.onNext(progress);
+                    }), "Missing result");
             if (Context.current().isCancelled()) return;
-            output.onNext(update(request, JobUpdate.State.COMPLETED).setResult(result.toString()).build());
+            var completed = latest[0] == null ? update(request, JobUpdate.State.COMPLETED)
+                    : latest[0].toBuilder().setState(JobUpdate.State.COMPLETED);
+            output.onNext(completed.setResult(result.toString()).build());
             output.onCompleted();
         } catch (Exception e) {
             if (e instanceof InterruptedException) Thread.currentThread().interrupt();

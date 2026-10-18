@@ -12,9 +12,38 @@ public final class ClientGui extends JFrame {
     private final JTextField port = new JTextField("5000", 6);
     private final JComboBox<Job.Type> type = new JComboBox<>(Job.Type.values());
     private final JTextArea input = new JTextArea("1,2,3,4,5", 5, 50);
-    private final DefaultTableModel results = new DefaultTableModel(new String[]{"Task", "Type", "Status", "Result / error"}, 0) {
+    private final DefaultTableModel results = new DefaultTableModel(new String[]{"Task", "Type", "Status", "Result / error", "Progress (click for workers)"}, 0) {
         @Override public boolean isCellEditable(int row, int column) { return false; }
     };
+
+    private final java.util.Map<Integer, edu.usp.cs324.proto.jobs.JobUpdate> progressByRow = new java.util.HashMap<>();
+    private final java.util.Map<Integer, JTable> detailTables = new java.util.HashMap<>();
+
+    private void refreshDetails(int row) {
+        JTable table = detailTables.get(row);
+        var update = progressByRow.get(row);
+        if (table == null || update == null) return;
+        var model = (DefaultTableModel) table.getModel();
+        model.setRowCount(0);
+        for (var task : update.getTasksList()) model.addRow(new Object[]{task.getTaskId(),
+                task.getWorkerId() == 0 ? "Unassigned" : task.getWorkerId(), task.getWorkerIncarnationId(),
+                task.getState(), task.getAttempt(), task.getUnits(),
+                task.getState().equals("COMPLETED") ? task.getUnits() : 0});
+    }
+
+    private void showDetails(int row) {
+        JTable details = new JTable(new DefaultTableModel(new String[]{"Task", "Worker", "Incarnation",
+                "State", "Attempt", "Assigned units", "Completed units"}, 0) {
+            @Override public boolean isCellEditable(int r, int c) { return false; }
+        });
+        detailTables.put(row, details); refreshDetails(row);
+        JDialog dialog = new JDialog(this, "Worker progress — job " + (row + 1), false);
+        dialog.add(new JScrollPane(details)); dialog.setSize(950, 300); dialog.setLocationRelativeTo(this);
+        dialog.addWindowListener(new java.awt.event.WindowAdapter() {
+            @Override public void windowClosed(java.awt.event.WindowEvent e) { detailTables.remove(row, details); }
+        });
+        dialog.setDefaultCloseOperation(JDialog.DISPOSE_ON_CLOSE); dialog.setVisible(true);
+    }
 
     public ClientGui(String bootstrapHost, String bootstrapPort) {
         super("DistriLab jobs");
@@ -42,6 +71,17 @@ public final class ClientGui extends JFrame {
         editor.add(bottom, BorderLayout.SOUTH);
         JTable table = new JTable(results);
         table.setAutoResizeMode(JTable.AUTO_RESIZE_LAST_COLUMN);
+        table.getColumnModel().getColumn(4).setCellRenderer((t, value, selected, focused, row, column) -> {
+            JProgressBar bar = new JProgressBar(0, 100); bar.setStringPainted(true);
+            int percent = value instanceof Integer ? (Integer) value : 0;
+            bar.setValue(percent); bar.setString(percent + "%"); return bar;
+        });
+        table.addMouseListener(new java.awt.event.MouseAdapter() {
+            @Override public void mouseClicked(java.awt.event.MouseEvent e) {
+                int row = table.rowAtPoint(e.getPoint());
+                if (row >= 0 && table.columnAtPoint(e.getPoint()) == 4) showDetails(row);
+            }
+        });
         add(editor, BorderLayout.NORTH); add(new JScrollPane(table), BorderLayout.CENTER);
         setDefaultCloseOperation(JFrame.EXIT_ON_CLOSE);
         setSize(900, 500); setLocationByPlatform(true);
@@ -53,7 +93,7 @@ public final class ClientGui extends JFrame {
         String data = input.getText();
         Job.Type selected = (Job.Type) type.getSelectedItem();
         int row = results.getRowCount();
-        results.addRow(new Object[]{row + 1, selected, "Running", file == null ? "Manual input" : file.toString()});
+        results.addRow(new Object[]{row + 1, selected, "Running", file == null ? "Manual input" : file.toString(), 0});
         new SwingWorker<String, edu.usp.cs324.proto.jobs.JobUpdate>() {
             @Override protected String doInBackground() throws Exception {
                 int number = Integer.parseInt(portText);
@@ -62,7 +102,13 @@ public final class ClientGui extends JFrame {
                 return new GrpcJobClient(endpoint, number).submit(job, this::publish).toString();
             }
             @Override protected void process(java.util.List<edu.usp.cs324.proto.jobs.JobUpdate> updates) {
-                for (var update : updates) results.setValueAt(update.getState().name(), row, 2);
+                for (var update : updates) {
+                    results.setValueAt(update.getState().name(), row, 2);
+                    progressByRow.put(row, update);
+                    if (update.getTotalUnits() > 0) results.setValueAt(
+                            (int) (100L * update.getCompletedUnits() / update.getTotalUnits()), row, 4);
+                    refreshDetails(row);
+                }
             }
             @Override protected void done() {
                 try {

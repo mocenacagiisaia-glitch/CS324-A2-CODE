@@ -84,7 +84,7 @@ class RecoveryRuntimeTest {
             }).maxInboundMessageSize(RecoveryStateServiceImpl.MAX_RPC_MESSAGE_BYTES)
                     .addService(new WorkerMembershipServiceImpl(node, directory)).addService(new RecoveryStateServiceImpl(store))
                     .addService(new CoordinationServiceImpl(node, directory::endpoint)).addService(runtime.service())
-                    .addService(new JobServiceImpl(runtime::submit)).build().start();
+                    .addService(new JobServiceImpl(runtime::submit, runtime::submitWithProgress)).build().start();
             directory.register(peer); runtime.start();
         }
         @Override public void close() throws Exception {
@@ -128,6 +128,37 @@ class RecoveryRuntimeTest {
             }
         };
     }
+    @Test void streamsOnlyCompletedWorkAndIncludesWorkerAssignments() throws Exception {
+        CountDownLatch release = new CountDownLatch(1);
+        var updates = new java.util.concurrent.CopyOnWriteArrayList<edu.usp.cs324.proto.jobs.JobUpdate>();
+        JobEngine engine = new IntegerJobEngine();
+        JobEngine controlled = new JobEngine() {
+            public List<Job> split(Job job, int count) { return engine.split(job, count); }
+            public BigInteger aggregate(Job.Type type, List<BigInteger> results) { return engine.aggregate(type, results); }
+            public BigInteger compute(Job job) {
+                if (job.start() != 1) try {
+                    if (!release.await(20, TimeUnit.SECONDS)) throw new IllegalStateException("Release timeout");
+                } catch (InterruptedException e) { Thread.currentThread().interrupt(); throw new IllegalStateException(e); }
+                return engine.compute(job);
+            }
+        };
+        try (var c = new Cluster(controlled); var pool = Executors.newVirtualThreadPerTaskExecutor()) {
+            var result = pool.submit(() -> c.client.submit("stream-progress", JOB, updates::add));
+            try {
+                await(() -> updates.stream().anyMatch(u -> u.getCompletedUnits() == 334));
+                var partial = updates.stream().filter(u -> u.getCompletedUnits() == 334).findFirst().orElseThrow();
+                assertEquals(1000, partial.getTotalUnits());
+                assertEquals(3, partial.getTasksCount());
+                assertEquals(1, partial.getTasksList().stream().filter(t -> t.getState().equals("COMPLETED")).count());
+                assertTrue(partial.getTasksList().stream().filter(t -> t.getState().equals("COMPLETED"))
+                        .allMatch(t -> t.getWorkerId() > 0 && !t.getWorkerIncarnationId().isBlank()));
+            } finally { release.countDown(); }
+            assertEquals(BigInteger.valueOf(76127), result.get(30, TimeUnit.SECONDS));
+            assertEquals(1000, updates.getLast().getCompletedUnits());
+            assertEquals(edu.usp.cs324.proto.jobs.JobUpdate.State.COMPLETED, updates.getLast().getState());
+        }
+    }
+
     @Test void duplicateIdsShareOneDurableJobAndRejectDifferentInput() throws Exception {
         try (var c = new Cluster(new IntegerJobEngine()); var pool = Executors.newVirtualThreadPerTaskExecutor()) {
             var first = pool.submit(() -> c.client.submit("same-job", JOB, p -> {}));
@@ -168,7 +199,8 @@ class RecoveryRuntimeTest {
     @Test void coordinatorFailureRecoversAcceptedTasksAndKeepsOneResult() throws Exception {
         CountDownLatch release = new CountDownLatch(1); AtomicInteger calls = new AtomicInteger();
         try (var c = new Cluster(blocking(release, calls)); var pool = Executors.newVirtualThreadPerTaskExecutor()) {
-            var result = pool.submit(() -> c.client.submit("leader-failure", JOB, p -> {}));
+            var updates = new java.util.concurrent.CopyOnWriteArrayList<edu.usp.cs324.proto.jobs.JobUpdate>();
+            var result = pool.submit(() -> c.client.submit("leader-failure", JOB, updates::add));
             await(() -> calls.get() >= 3);
             assertEquals(3, c.latest(0).getCoordinatorId());
             c.crash(2, true); release.countDown();
@@ -176,6 +208,14 @@ class RecoveryRuntimeTest {
             var state = c.latest(0);
             assertEquals(2, state.getCoordinatorId()); assertEquals(1, state.getJobsCount());
             assertTrue(state.getJobs(0).getTasksList().stream().anyMatch(t -> t.getAttempt() >= 2));
+            assertEquals(1000, updates.getLast().getCompletedUnits());
+            assertEquals(1000, updates.getLast().getTotalUnits());
+            assertTrue(updates.getLast().getTasksList().stream().anyMatch(t -> t.getAttempt() >= 2));
+            long previous = 0;
+            for (var update : updates) {
+                assertTrue(update.getCompletedUnits() >= previous);
+                previous = update.getCompletedUnits();
+            }
         } finally { release.countDown(); }
     }
     @Test void sequencerFailureReconnectsSameClientIdAndRecoversFromSurvivingReplica() throws Exception {

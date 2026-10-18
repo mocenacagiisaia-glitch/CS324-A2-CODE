@@ -134,3 +134,15 @@ One earlier GrpcJobsIT run exited successfully but had empty client log files,
 so the unchanged assertion for 12 PASS lines failed. The cause is unknown. Its
 focused rerun and the final clean full run both passed without changing that
 test or its assertions.
+
+## Actual streamed progress update
+
+JobUpdate now carries completed/total input units and task details. Progress is
+computed from durable task states; only COMPLETED tasks contribute units.
+PRIMESUM weights each task by its inclusive range length; other jobs use element
+count. Reassignment changes the task owner/attempt without adding denominator
+units or counting a discarded attempt. Completed task results are retained.
+The server streams changed snapshots while the original submission waits.
+The client accepts repeated RUNNING updates and suppresses stale lower counts
+across reconnects. Clicking the GUI progress bar opens live per-task worker
+information. Progress is coarse at task boundaries, not estimated CPU progress.

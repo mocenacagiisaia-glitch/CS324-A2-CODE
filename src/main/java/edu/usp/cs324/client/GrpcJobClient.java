@@ -33,6 +33,8 @@ public final class GrpcJobClient {
         SubmitJobRequest request = SubmitJobRequest.newBuilder().setRequestId(id).setInput(JobWire.encode(job)).build();
         long deadline = System.nanoTime() + TimeUnit.MINUTES.toNanos(10);
         int delivered = 0;
+        JobUpdate lastProgress = null;
+        long completedUnits = 0;
         boolean mayReconnect = true;
         for (;;) {
             try {
@@ -49,12 +51,19 @@ public final class GrpcJobClient {
                     while (stream.hasNext()) {
                         JobUpdate update = stream.next();
                         int state = update.getStateValue();
-                        if (!id.equals(update.getRequestId()) || state != previous + 1 || state > 3)
+                        if (!id.equals(update.getRequestId()) || (state != previous + 1 && !(state == 2 && previous == 2)) || state > 3)
                             throw new IllegalStateException("Invalid job progress sequence");
                         if ((state == 3) != update.hasResult()) throw new IllegalStateException("Result must be present only on completion");
                         if (state == 3) result = new BigInteger(update.getResult());
                         previous = state;
-                        if (state > delivered) { progress.accept(update); delivered = state; }
+                        if (update.getCompletedUnits() < 0 || update.getTotalUnits() < 0
+                                || update.getCompletedUnits() > update.getTotalUnits())
+                            throw new IllegalStateException("Invalid completed work counts");
+                        if (state >= delivered && update.getCompletedUnits() >= completedUnits
+                                && !update.equals(lastProgress)) {
+                            progress.accept(update); delivered = state; lastProgress = update;
+                            completedUnits = update.getCompletedUnits();
+                        }
                     }
                     if (result == null) throw new IllegalStateException("Stream ended without a result; resume job ID: " + id);
                     return result;

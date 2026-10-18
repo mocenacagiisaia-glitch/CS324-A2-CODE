@@ -328,7 +328,7 @@ public final class WorkerNode implements WorkerRemote, AutoCloseable {
                         .maxInboundMessageSize(RecoveryStateServiceImpl.MAX_RPC_MESSAGE_BYTES)
                         .addService(new WorkerMembershipServiceImpl(node, bootstrap))
                         .addService(new RecoveryStateServiceImpl(recovery))
-						.addService(new edu.usp.cs324.jobs.JobServiceImpl(durable::submit))
+						.addService(new edu.usp.cs324.jobs.JobServiceImpl(durable::submit, durable::submitWithProgress))
                         .addService(durable.service())
                         .addService(new CoordinationServiceImpl(node, bootstrap::endpoint)).build().start();
                 // Listen before registration: reciprocal AddNeighbour RPCs must reach us.
