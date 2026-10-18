@@ -1,3 +1,85 @@
+# CS324 Assignment 2 — gRPC DistriLab
+
+Requires Java 21 and Maven. Run every command from this project root. Check
+`java -version` and `mvn -version` both use Java 21.
+
+## Build and verify
+
+```powershell
+mvn clean verify -Pintegration
+```
+
+## Start the cluster
+
+Open a separate terminal per process. Start the bootstrap first:
+
+```powershell
+mvn "-Dexec.mainClass=edu.usp.cs324.network.BootstrapGrpcServer" "-Dexec.args=5000" org.codehaus.mojo:exec-maven-plugin:3.5.0:java
+```
+
+Start these three workers, each in its own terminal:
+
+```powershell
+mvn "-Dexec.mainClass=edu.usp.cs324.network.WorkerNode" "-Dexec.args=1 127.0.0.1 2001 3001 4001 127.0.0.1 5000 data/demo-recovery-01/worker-1.checkpoint" org.codehaus.mojo:exec-maven-plugin:3.5.0:java
+mvn "-Dexec.mainClass=edu.usp.cs324.network.WorkerNode" "-Dexec.args=2 127.0.0.1 2002 3002 4002 127.0.0.1 5000 data/demo-recovery-01/worker-2.checkpoint" org.codehaus.mojo:exec-maven-plugin:3.5.0:java
+mvn "-Dexec.mainClass=edu.usp.cs324.network.WorkerNode" "-Dexec.args=3 127.0.0.1 2003 3003 4003 127.0.0.1 5000 data/demo-recovery-01/worker-3.checkpoint" org.codehaus.mojo:exec-maven-plugin:3.5.0:java
+```
+
+Worker arguments: ID, host, legacy registry/export metadata ports, gRPC port,
+bootstrap host, bootstrap gRPC port, checkpoint path. This launcher communicates
+between processes using gRPC; it does not export an RMI worker. Use unique IDs,
+ports and checkpoint paths for additional workers. Wait for WORKER READY.
+
+## Start clients
+
+```powershell
+mvn "-Dexec.mainClass=edu.usp.cs324.client.ClientGui" "-Dexec.args=127.0.0.1 5000" org.codehaus.mojo:exec-maven-plugin:3.5.0:java
+```
+
+Select MAX or PRIMECOUNT and enter comma/newline separated integers. For PRIMESUM,
+enter inclusive start,end. CSV files are headerless integers in the same format.
+Each click submits a new job. Multiple GUI clients can run concurrently.
+
+The progress column shows completed input units / total input units, measured
+from saved task completions. Click its bar to open a live table showing each
+task's worker ID, incarnation, state, attempt, assigned units and completed units.
+A running chunk contributes zero until its result is saved; there is no timer
+or estimated progress. This coarse progress can remain flat during long chunks.
+Unit weighting describes input coverage, not CPU time or estimated time remaining.
+
+For checked concurrent headless submissions:
+
+```powershell
+mvn "-Dexec.mainClass=edu.usp.cs324.client.GrpcHeadlessClient" "-Dexec.args=127.0.0.1 5000" org.codehaus.mojo:exec-maven-plugin:3.5.0:java
+```
+
+## Recovery demonstration
+
+Submit PRIMESUM 1,100000000. While unfinished, stop worker 3 using Ctrl+C.
+Keep bootstrap, other workers and the GUI running; do not resubmit. The system
+waits for lease expiry (about 15 seconds) and reassigns unfinished attempts.
+Computation adds further time. Restart the worker with the exact same command
+and checkpoint path to load saved state and catch up. Never remove or overwrite
+checkpoint files while stores are open. A fresh demonstration can use new paths.
+Stop clients, workers, then bootstrap after the demonstration.
+
+## Structure and limits
+
+Client files: src/main/java/edu/usp/cs324/client; workers and bootstrap:
+src/main/java/edu/usp/cs324/network (separate launcher classes); calculations:
+jobs; checkpoint/recovery: recovery; protocol contracts: src/main/proto.
+These are packages in one Maven project, not separate Maven modules.
+
+See docs/A2_RECOVERY_RUNTIME.md for the trusted fail-stop model, all-listed-replica
+acknowledgements, stable IDs and practical limits. GUI IDs survive reconnection
+within a submission, but are not persisted across closing the GUI. Bootstrap
+must remain available; network partition consensus is outside this protocol.
+Retained A1 RMI launchers/tests are regression paths, not A2 startup commands.
+
+---
+
+## Historical A1 documentation
+
 > A2 client migration: see [gRPC jobs and clients](docs/A2_JOBS_CLIENT.md) for current startup commands and integration limits. The A1 instructions below describe the retained RMI regression path.
 
 # CS324 A1 — three-person development project

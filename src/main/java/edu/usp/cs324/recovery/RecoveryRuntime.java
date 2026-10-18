@@ -84,16 +84,44 @@ public final class RecoveryRuntime implements AutoCloseable {
     }
 
     public BigInteger submit(String id, Job input) throws Exception {
+        return submitWithProgress(id, input, update -> { });
+    }
+
+    public BigInteger submitWithProgress(String id, Job input,
+            java.util.function.Consumer<edu.usp.cs324.proto.jobs.JobUpdate> progress) throws Exception {
         if (id == null || id.isBlank() || id.length() > 128) throw new IllegalArgumentException("Job ID must contain 1..128 characters");
         RecoverySnapshot snapshot = control(RecoveryMutation.newBuilder().setAction(RecoveryMutation.Action.REGISTER)
                 .setJobId(id).setInput(encode(input)).build());
+        edu.usp.cs324.proto.jobs.JobUpdate previous = null;
         for (;;) {
             RecoveryJob job = job(snapshot, id);
+            var update = progress(job);
+            if (!update.equals(previous)) { progress.accept(update); previous = update; }
             if (job.getState() == RecoveryJob.State.COMPLETED) return new BigInteger(job.getResult());
             if (Context.current().isCancelled()) throw new CancellationException("Stream disconnected; job remains recoverable");
             Thread.sleep(150);
             snapshot = control(RecoveryMutation.newBuilder().setAction(RecoveryMutation.Action.READ).setJobId(id).build());
         }
+    }
+
+    /** Completed work is counted only from persisted, attempt-fenced task results. */
+    public static edu.usp.cs324.proto.jobs.JobUpdate progress(RecoveryJob job) {
+        var update = edu.usp.cs324.proto.jobs.JobUpdate.newBuilder().setRequestId(job.getJobId())
+                .setState(edu.usp.cs324.proto.jobs.JobUpdate.State.RUNNING);
+        long total = 0, completed = 0;
+        for (var task : job.getTasksList()) {
+            var input = task.getInput();
+            long units = input.getOperation() == RecoveryJobInput.Operation.PRIMESUM
+                    ? Math.max(0L, (long) input.getRangeEnd() - input.getRangeStart() + 1)
+                    : input.getNumbersCount();
+            total += units;
+            if (task.getState() == RecoveryTask.State.COMPLETED) completed += units;
+            update.addTasks(edu.usp.cs324.proto.jobs.TaskProgress.newBuilder()
+                    .setTaskId(task.getTaskId()).setWorkerId(task.getAssignedWorkerId())
+                    .setWorkerIncarnationId(task.getAssignedWorkerIncarnationId())
+                    .setState(task.getState().name()).setAttempt(task.getAttempt()).setUnits(units));
+        }
+        return update.setTotalUnits(total).setCompletedUnits(completed).build();
     }
 
     public BindableService service() {
